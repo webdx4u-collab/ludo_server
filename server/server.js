@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 8080;
 // Create HTTP server for health checks & WebSocket upgrade
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'ok', service: 'Royal Ludo Multiplayer Server' }));
+  res.end(JSON.stringify({ status: 'ok', service: 'Royal Ludo Multiplayer Server 1' }));
 });
 
 const wss = new WebSocketServer({ server });
