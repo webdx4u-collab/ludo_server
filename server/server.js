@@ -223,6 +223,7 @@ wss.on('connection', (ws) => {
         // Gameplay actions: Rebroadcast to all other players in the room
         case 'diceRoll':
         case 'tokenMove':
+        case 'turnPass':
         case 'emote': {
           if (!currentRoomCode) return;
           broadcastToRoom(currentRoomCode, msg, senderId);
