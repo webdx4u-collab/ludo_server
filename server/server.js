@@ -8,16 +8,49 @@ const http = require('http');
 
 const PORT = process.env.PORT || 8080;
 
-// Create HTTP server for health checks & WebSocket upgrade
+// In-Memory active rooms: Map<roomCode, { state, clients: Map<playerId, ws> }>
+const rooms = new Map();
+
+// Helper to normalize room code (e.g. "944375" -> "LUDO-944375")
+function normalizeRoomCode(code) {
+  if (!code) return '';
+  let clean = String(code).trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  if (!clean.startsWith('LUDO-') && /^\d+$/.test(clean)) {
+    clean = `LUDO-${clean}`;
+  }
+  return clean;
+}
+
+// HTTP server for health checks, room inspection & WebSocket upgrade
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'ok', service: 'Royal Ludo Multiplayer Server 1' }));
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
+
+  if (req.url === '/rooms') {
+    const activeRooms = [];
+    for (const [code, roomObj] of rooms.entries()) {
+      activeRooms.push({
+        roomCode: code,
+        status: roomObj.state.status,
+        playerCount: roomObj.state.players.length,
+        maxPlayers: roomObj.state.maxPlayers,
+        players: roomObj.state.players.map((p) => ({ id: p.id, name: p.name, color: p.color, isReady: p.isReady })),
+      });
+    }
+    res.writeHead(200);
+    res.end(JSON.stringify({ activeRoomsCount: rooms.size, rooms: activeRooms }));
+    return;
+  }
+
+  res.writeHead(200);
+  res.end(JSON.stringify({
+    status: 'ok',
+    service: 'Royal Ludo Multiplayer WebSocket Server',
+    activeRooms: rooms.size,
+  }));
 });
 
 const wss = new WebSocketServer({ server });
-
-// In-Memory active rooms: Map<roomCode, { state, clients: Map<playerId, ws> }>
-const rooms = new Map();
 
 wss.on('connection', (ws) => {
   let currentRoomCode = null;
@@ -33,13 +66,13 @@ wss.on('connection', (ws) => {
       switch (type) {
         case 'createRoom': {
           const { roomCode, maxPlayers, playerName } = data;
-          const cleanCode = (roomCode || '').trim().toUpperCase();
+          const cleanCode = normalizeRoomCode(roomCode);
           currentRoomCode = cleanCode;
           currentPlayerId = senderId;
 
           const hostPlayer = {
             id: senderId,
-            name: playerName,
+            name: playerName || 'Host Player',
             color: 'red',
             isHost: true,
             isBot: false,
@@ -62,7 +95,7 @@ wss.on('connection', (ws) => {
             clients: clientsMap,
           });
 
-          console.log(`[Room Created] ${cleanCode} by ${playerName} (${senderId})`);
+          console.log(`[Room Created] ${cleanCode} by "${playerName}" (${senderId}). Total rooms: ${rooms.size}`);
 
           ws.send(JSON.stringify({
             type: 'roomUpdate',
@@ -73,14 +106,14 @@ wss.on('connection', (ws) => {
         }
 
         case 'join': {
-          let { roomCode, name } = data;
-          let cleanCode = (roomCode || '').trim().toUpperCase();
-          if (!cleanCode.startsWith('LUDO-') && /^\d+$/.test(cleanCode)) {
-            cleanCode = `LUDO-${cleanCode}`;
-          }
+          const { roomCode, name } = data;
+          const cleanCode = normalizeRoomCode(roomCode);
+          console.log(`[Join Attempt] Request to join "${cleanCode}" by "${name}" (${senderId})`);
+
           const roomObj = rooms.get(cleanCode);
 
           if (!roomObj) {
+            console.log(`[Join Failed] Room "${cleanCode}" not found. Active rooms: [${Array.from(rooms.keys()).join(', ')}]`);
             ws.send(JSON.stringify({
               type: 'error',
               senderId: 'server',
@@ -117,7 +150,7 @@ wss.on('connection', (ws) => {
           roomObj.state.players.push(newPlayer);
           roomObj.clients.set(senderId, ws);
 
-          console.log(`[Player Joined] ${name} (${senderId}) joined ${cleanCode}`);
+          console.log(`[Player Joined] "${name}" joined "${cleanCode}". Current players: ${roomObj.state.players.length}/${roomObj.state.maxPlayers}`);
 
           broadcastToRoom(cleanCode, {
             type: 'roomUpdate',
