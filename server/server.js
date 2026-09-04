@@ -274,17 +274,35 @@ function handleDisconnect(roomCode, playerId) {
   const roomObj = rooms.get(roomCode);
   if (!roomObj) return;
 
+  console.log(`[-] Player ${playerId} left/disconnected from ${roomCode}`);
   roomObj.clients.delete(playerId);
 
-  // If host leaves or room is empty, remove room
-  if (roomObj.state.hostId === playerId || roomObj.clients.size === 0) {
+  // Broadcast playerLeft to all remaining players in room
+  broadcastToRoom(roomCode, {
+    type: 'playerLeft',
+    senderId: playerId,
+    data: {
+      playerId: playerId,
+      roomCode: roomCode,
+    },
+  });
+
+  // Remove player from room state
+  roomObj.state.players = roomObj.state.players.filter((p) => p.id !== playerId);
+
+  // If room is empty, remove room
+  if (roomObj.clients.size === 0 || roomObj.state.players.length === 0) {
     console.log(`[Room Closed] ${roomCode}`);
     rooms.delete(roomCode);
     return;
   }
 
-  // Remove player or mark as disconnected
-  roomObj.state.players = roomObj.state.players.filter((p) => p.id !== playerId);
+  // If host left, transfer host authority to next remaining player
+  if (roomObj.state.hostId === playerId && roomObj.state.players.length > 0) {
+    roomObj.state.hostId = roomObj.state.players[0].id;
+    roomObj.state.players[0].isHost = true;
+    console.log(`[Host Transferred] ${roomCode} new host is ${roomObj.state.players[0].name}`);
+  }
 
   broadcastToRoom(roomCode, {
     type: 'roomUpdate',
