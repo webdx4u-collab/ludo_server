@@ -134,9 +134,13 @@ wss.on('connection', (ws) => {
           currentRoomCode = cleanCode;
           currentPlayerId = senderId;
 
-          const allColors = ['red', 'green', 'yellow', 'blue'];
+          const allColors = roomObj.state.maxPlayers === 2
+            ? ['red', 'yellow']
+            : (roomObj.state.maxPlayers === 3
+                ? ['red', 'green', 'yellow']
+                : ['red', 'green', 'yellow', 'blue']);
           const usedColors = new Set(roomObj.state.players.map((p) => p.color));
-          const availableColor = allColors.find((c) => !usedColors.has(c)) || 'green';
+          const availableColor = allColors.find((c) => !usedColors.has(c)) || (roomObj.state.maxPlayers === 2 ? 'yellow' : 'green');
 
           const newPlayer = {
             id: senderId,
@@ -182,9 +186,13 @@ wss.on('connection', (ws) => {
           const roomObj = rooms.get(currentRoomCode);
           if (!roomObj || roomObj.state.players.length >= roomObj.state.maxPlayers) return;
 
-          const allColors = ['red', 'green', 'yellow', 'blue'];
+          const allColors = roomObj.state.maxPlayers === 2
+            ? ['red', 'yellow']
+            : (roomObj.state.maxPlayers === 3
+                ? ['red', 'green', 'yellow']
+                : ['red', 'green', 'yellow', 'blue']);
           const usedColors = new Set(roomObj.state.players.map((p) => p.color));
-          const availableColor = allColors.find((c) => !usedColors.has(c)) || 'green';
+          const availableColor = allColors.find((c) => !usedColors.has(c)) || (roomObj.state.maxPlayers === 2 ? 'yellow' : 'green');
 
           const botPlayer = {
             id: `bot_${Date.now()}`,
