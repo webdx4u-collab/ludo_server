@@ -105,6 +105,115 @@ wss.on('connection', (ws) => {
           break;
         }
 
+        case 'quickMatch': {
+          const { maxPlayers, playerName } = data;
+          const targetMax = parseInt(maxPlayers) || 2;
+          console.log(`[Quick Match Request] from "${playerName}" (${senderId}) for ${targetMax} players`);
+
+          // 1. Search for an open waiting matchmaking room for this player count
+          let matchedRoomCode = null;
+          let matchedRoomObj = null;
+
+          for (const [code, roomObj] of rooms.entries()) {
+            if (
+              roomObj.state.status === 'waiting' &&
+              roomObj.state.maxPlayers === targetMax &&
+              roomObj.state.players.length < targetMax &&
+              !roomObj.state.players.some((p) => p.id === senderId)
+            ) {
+              matchedRoomCode = code;
+              matchedRoomObj = roomObj;
+              break;
+            }
+          }
+
+          if (matchedRoomObj) {
+            // Join existing waiting room
+            currentRoomCode = matchedRoomCode;
+            currentPlayerId = senderId;
+
+            const allColors = targetMax === 2
+              ? ['red', 'yellow']
+              : (targetMax === 3
+                  ? ['red', 'green', 'yellow']
+                  : ['red', 'green', 'yellow', 'blue']);
+            const usedColors = new Set(matchedRoomObj.state.players.map((p) => p.color));
+            const availableColor = allColors.find((c) => !usedColors.has(c)) || (targetMax === 2 ? 'yellow' : 'green');
+
+            const newPlayer = {
+              id: senderId,
+              name: playerName || `Player ${matchedRoomObj.state.players.length + 1}`,
+              color: availableColor,
+              isHost: false,
+              isBot: false,
+              isReady: true,
+            };
+
+            matchedRoomObj.state.players.push(newPlayer);
+            matchedRoomObj.clients.set(senderId, ws);
+
+            console.log(`[Quick Match Success] "${playerName}" joined room "${matchedRoomCode}" (${matchedRoomObj.state.players.length}/${targetMax})`);
+
+            broadcastToRoom(matchedRoomCode, {
+              type: 'roomUpdate',
+              senderId: 'server',
+              data: matchedRoomObj.state,
+            });
+
+            // If room is now full, auto-start game
+            if (matchedRoomObj.state.players.length >= targetMax) {
+              matchedRoomObj.state.status = 'playing';
+              console.log(`[Auto Start Game] Matchmaking room "${matchedRoomCode}" is full! Starting game.`);
+              setTimeout(() => {
+                broadcastToRoom(matchedRoomCode, {
+                  type: 'startGame',
+                  senderId: 'server',
+                  data: matchedRoomObj.state,
+                });
+              }, 600);
+            }
+          } else {
+            // Create a new public matchmaking room
+            const newCode = `MATCH-${targetMax}P-${Math.floor(1000 + Math.random() * 9000)}`;
+            currentRoomCode = newCode;
+            currentPlayerId = senderId;
+
+            const hostPlayer = {
+              id: senderId,
+              name: playerName || 'Player 1',
+              color: 'red',
+              isHost: true,
+              isBot: false,
+              isReady: true,
+            };
+
+            const roomState = {
+              roomCode: newCode,
+              maxPlayers: targetMax,
+              players: [hostPlayer],
+              status: 'waiting',
+              hostId: senderId,
+            };
+
+            const clientsMap = new Map();
+            clientsMap.set(senderId, ws);
+
+            rooms.set(newCode, {
+              state: roomState,
+              clients: clientsMap,
+            });
+
+            console.log(`[Quick Match Queue Created] ${newCode} waiting for ${targetMax - 1} more players.`);
+
+            ws.send(JSON.stringify({
+              type: 'roomUpdate',
+              senderId: 'server',
+              data: roomState,
+            }));
+          }
+          break;
+        }
+
         case 'join': {
           const { roomCode, name } = data;
           const cleanCode = normalizeRoomCode(roomCode);
