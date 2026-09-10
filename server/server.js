@@ -342,7 +342,9 @@ wss.on('connection', (ws) => {
         case 'tokenMove':
         case 'emote':
         case 'playerStatus':
-        case 'playerAutoMove': {
+        case 'playerAutoMove':
+        case 'requestStateSync':
+        case 'gameStateSync': {
           if (!currentRoomCode) return;
           broadcastToRoom(currentRoomCode, msg, senderId);
           break;
