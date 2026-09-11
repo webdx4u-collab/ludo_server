@@ -343,10 +343,32 @@ wss.on('connection', (ws) => {
         case 'emote':
         case 'playerStatus':
         case 'playerAutoMove':
-        case 'playerForfeited':
-        case 'requestStateSync':
+        case 'playerForfeited': {
+          if (!currentRoomCode) return;
+          broadcastToRoom(currentRoomCode, msg, senderId);
+          break;
+        }
+
         case 'gameStateSync': {
           if (!currentRoomCode) return;
+          const roomObj = rooms.get(currentRoomCode);
+          if (roomObj && data) {
+            roomObj.latestGameState = data;
+          }
+          broadcastToRoom(currentRoomCode, msg, senderId);
+          break;
+        }
+
+        case 'requestStateSync': {
+          if (!currentRoomCode) return;
+          const roomObj = rooms.get(currentRoomCode);
+          if (roomObj && roomObj.latestGameState) {
+            ws.send(JSON.stringify({
+              type: 'gameStateSync',
+              senderId: 'server',
+              data: roomObj.latestGameState,
+            }));
+          }
           broadcastToRoom(currentRoomCode, msg, senderId);
           break;
         }
@@ -384,6 +406,15 @@ wss.on('connection', (ws) => {
             senderId: 'server',
             data: roomObj.state,
           }));
+
+          // If game is in progress and we have latest game state, send it immediately
+          if (roomObj.latestGameState) {
+            ws.send(JSON.stringify({
+              type: 'gameStateSync',
+              senderId: 'server',
+              data: roomObj.latestGameState,
+            }));
+          }
 
           // Notify other players that player is active again
           broadcastToRoom(cleanCode, {
