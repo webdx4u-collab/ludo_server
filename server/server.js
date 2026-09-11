@@ -343,10 +343,59 @@ wss.on('connection', (ws) => {
         case 'emote':
         case 'playerStatus':
         case 'playerAutoMove':
+        case 'playerForfeited':
         case 'requestStateSync':
         case 'gameStateSync': {
           if (!currentRoomCode) return;
           broadcastToRoom(currentRoomCode, msg, senderId);
+          break;
+        }
+
+        case 'reconnect': {
+          const { roomCode, playerId, playerName } = data;
+          const cleanCode = normalizeRoomCode(roomCode);
+          console.log(`[Reconnect Request] Player "${playerId}" attempting to reconnect to "${cleanCode}"`);
+
+          const roomObj = rooms.get(cleanCode);
+          if (!roomObj) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              senderId: 'server',
+              data: { message: `Room "${cleanCode}" no longer active.` },
+            }));
+            return;
+          }
+
+          currentRoomCode = cleanCode;
+          currentPlayerId = playerId || senderId;
+
+          // Re-attach websocket client
+          roomObj.clients.set(currentPlayerId, ws);
+          if (roomObj.cleanupTimeout) {
+            clearTimeout(roomObj.cleanupTimeout);
+            roomObj.cleanupTimeout = null;
+          }
+
+          console.log(`[Reconnect Success] Player "${currentPlayerId}" reconnected to "${cleanCode}"`);
+
+          // Send current room state back to reconnected client
+          ws.send(JSON.stringify({
+            type: 'roomUpdate',
+            senderId: 'server',
+            data: roomObj.state,
+          }));
+
+          // Notify other players that player is active again
+          broadcastToRoom(cleanCode, {
+            type: 'playerStatus',
+            senderId: currentPlayerId,
+            data: {
+              playerId: currentPlayerId,
+              playerName: playerName,
+              isAway: false,
+              reason: 'reconnected',
+            },
+          }, currentPlayerId);
           break;
         }
 
@@ -395,10 +444,52 @@ function handleDisconnect(roomCode, playerId) {
   const roomObj = rooms.get(roomCode);
   if (!roomObj) return;
 
-  console.log(`[-] Player ${playerId} left/disconnected from ${roomCode}`);
+  console.log(`[-] Player ${playerId} socket disconnected from ${roomCode}`);
   roomObj.clients.delete(playerId);
 
-  // Broadcast playerLeft to all remaining players in room
+  // If game is currently playing:
+  // Do NOT immediately purge player or end the match!
+  // Instead, notify room that player is disconnected / away so the 5-move auto-play clock continues
+  // and the player can reconnect when they bring the app back to foreground.
+  if (roomObj.state.status === 'playing') {
+    broadcastToRoom(roomCode, {
+      type: 'playerStatus',
+      senderId: playerId,
+      data: {
+        playerId: playerId,
+        isAway: true,
+        reason: 'disconnected',
+      },
+    });
+
+    // If ALL clients disconnected, schedule cleanup after 5 minutes
+    let openClients = 0;
+    for (const client of roomObj.clients.values()) {
+      if (client.readyState === WebSocket.OPEN) openClients++;
+    }
+    if (openClients === 0) {
+      if (!roomObj.cleanupTimeout) {
+        roomObj.cleanupTimeout = setTimeout(() => {
+          if (rooms.has(roomCode)) {
+            let stillOpen = 0;
+            const cur = rooms.get(roomCode);
+            if (cur) {
+              for (const c of cur.clients.values()) {
+                if (c.readyState === WebSocket.OPEN) stillOpen++;
+              }
+              if (stillOpen === 0) {
+                console.log(`[Room Cleaned Up after inactivity] ${roomCode}`);
+                rooms.delete(roomCode);
+              }
+            }
+          }
+        }, 300000); // 5 minutes grace period
+      }
+    }
+    return;
+  }
+
+  // If match was in 'waiting' / lobby status, handle standard leave:
   broadcastToRoom(roomCode, {
     type: 'playerLeft',
     senderId: playerId,
@@ -408,17 +499,14 @@ function handleDisconnect(roomCode, playerId) {
     },
   });
 
-  // Remove player from room state
   roomObj.state.players = roomObj.state.players.filter((p) => p.id !== playerId);
 
-  // If room is empty, remove room
   if (roomObj.clients.size === 0 || roomObj.state.players.length === 0) {
     console.log(`[Room Closed] ${roomCode}`);
     rooms.delete(roomCode);
     return;
   }
 
-  // If host left, transfer host authority to next remaining player
   if (roomObj.state.hostId === playerId && roomObj.state.players.length > 0) {
     roomObj.state.hostId = roomObj.state.players[0].id;
     roomObj.state.players[0].isHost = true;
