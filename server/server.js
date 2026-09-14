@@ -373,9 +373,20 @@ wss.on('connection', (ws) => {
                     console.log(`[30s Timeout Expired] Player ${targetPlayerId} failed to reconnect to ${currentRoomCode}. Awarding victory to active player!`);
                     roomObj.isPaused = false;
                     roomObj.pausedPlayerId = null;
+                    roomObj.state.status = 'finished';
+                    roomObj.forfeitedPlayerId = targetPlayerId;
+                    roomObj.forfeitedReason = 'Failed to reconnect within 30 seconds';
 
                     const remainingPlayers = roomObj.state.players.filter((p) => p.id !== targetPlayerId);
                     const winner = remainingPlayers[0] || roomObj.state.players[0];
+                    roomObj.winner = winner;
+
+                    if (roomObj.latestGameState) {
+                      roomObj.latestGameState.isGameOver = true;
+                      roomObj.latestGameState.winnerColor = winner?.color;
+                      roomObj.latestGameState.forfeitedPlayerId = targetPlayerId;
+                      roomObj.latestGameState.reason = 'Failed to reconnect within 30 seconds';
+                    }
 
                     broadcastToRoom(currentRoomCode, {
                       type: 'playerForfeited',
@@ -478,6 +489,34 @@ wss.on('connection', (ws) => {
           if (roomObj.cleanupTimeout) {
             clearTimeout(roomObj.cleanupTimeout);
             roomObj.cleanupTimeout = null;
+          }
+
+          // If match already concluded / player was forfeited after 30s timeout:
+          if (roomObj.state.status === 'finished' || roomObj.forfeitedPlayerId === currentPlayerId) {
+            console.log(`[Reconnect After Timeout] Player "${currentPlayerId}" returned after 30s timeout expired. Sending match lost.`);
+            ws.send(JSON.stringify({
+              type: 'playerForfeited',
+              senderId: 'server',
+              data: {
+                playerId: currentPlayerId,
+                reason: 'Failed to reconnect within 30 seconds',
+                winnerId: roomObj.winner?.id,
+                winnerColor: roomObj.winner?.color,
+                winnerName: roomObj.winner?.name,
+              },
+            }));
+            if (roomObj.latestGameState) {
+              ws.send(JSON.stringify({
+                type: 'gameStateSync',
+                senderId: 'server',
+                data: {
+                  ...roomObj.latestGameState,
+                  isGameOver: true,
+                  winnerColor: roomObj.winner?.color,
+                },
+              }));
+            }
+            return;
           }
 
           // If room was paused for this player, unpause and resume!
