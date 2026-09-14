@@ -369,6 +369,7 @@ wss.on('connection', (ws) => {
               data: roomObj.latestGameState,
             }));
           }
+          // Also fetch live authoritative state from active master in the room
           broadcastToRoom(currentRoomCode, msg, senderId);
           break;
         }
@@ -400,14 +401,14 @@ wss.on('connection', (ws) => {
 
           console.log(`[Reconnect Success] Player "${currentPlayerId}" reconnected to "${cleanCode}"`);
 
-          // Send current room state back to reconnected client
+          // 1. Send current room state back to reconnected client
           ws.send(JSON.stringify({
             type: 'roomUpdate',
             senderId: 'server',
             data: roomObj.state,
           }));
 
-          // If game is in progress and we have latest game state, send it immediately
+          // 2. If game is in progress and server has latest game state, send it immediately
           if (roomObj.latestGameState) {
             ws.send(JSON.stringify({
               type: 'gameStateSync',
@@ -416,7 +417,16 @@ wss.on('connection', (ws) => {
             }));
           }
 
-          // Notify other players that player is active again
+          // 3. Ask the active master player in the room for a live authoritative game state snapshot
+          if (roomObj.state.status === 'playing') {
+            broadcastToRoom(cleanCode, {
+              type: 'requestStateSync',
+              senderId: 'server',
+              data: { playerId: currentPlayerId, roomCode: cleanCode },
+            }, currentPlayerId);
+          }
+
+          // 4. Notify other players that player is active again
           broadcastToRoom(cleanCode, {
             type: 'playerStatus',
             senderId: currentPlayerId,
