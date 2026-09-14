@@ -353,14 +353,16 @@ wss.on('connection', (ws) => {
               if (!roomObj.isPaused) {
                 roomObj.isPaused = true;
                 roomObj.pausedPlayerId = targetPlayerId;
-                console.log(`[Match Paused] Room ${currentRoomCode} paused for 30s because player ${targetPlayerId} is away/inactive`);
+                const p = roomObj.state.players.find((pl) => pl.id === targetPlayerId);
+                const pName = data?.playerName || p?.name || 'Opponent';
+                console.log(`[Match Paused] Room ${currentRoomCode} paused for 30s because player ${targetPlayerId} (${pName}) is away/inactive`);
 
                 broadcastToRoom(currentRoomCode, {
                   type: 'matchPaused',
                   senderId: targetPlayerId,
                   data: {
                     playerId: targetPlayerId,
-                    playerName: data?.playerName,
+                    playerName: pName,
                     durationSeconds: 30,
                     reason: data?.reason || 'away',
                     savedGameState: roomObj.latestGameState,
@@ -635,13 +637,16 @@ function handleDisconnect(roomCode, playerId) {
     if (!roomObj.isPaused) {
       roomObj.isPaused = true;
       roomObj.pausedPlayerId = playerId;
-      console.log(`[Match Paused on Disconnect] Room ${roomCode} paused for 30s because player ${playerId} disconnected`);
+      const p = roomObj.state.players.find((pl) => pl.id === playerId);
+      const pName = p ? p.name : 'Opponent';
+      console.log(`[Match Paused on Disconnect] Room ${roomCode} paused for 30s because player ${playerId} (${pName}) disconnected`);
 
       broadcastToRoom(roomCode, {
         type: 'matchPaused',
         senderId: playerId,
         data: {
           playerId: playerId,
+          playerName: pName,
           durationSeconds: 30,
           reason: 'disconnected',
           savedGameState: roomObj.latestGameState,
