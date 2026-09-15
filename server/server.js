@@ -340,94 +340,14 @@ wss.on('connection', (ws) => {
         case 'playerStatus': {
           if (!currentRoomCode) return;
           const roomObj = rooms.get(currentRoomCode);
-          const isAway = data?.isAway;
-          const targetPlayerId = data?.playerId || senderId;
 
           if (roomObj && roomObj.state.status === 'playing') {
             if (data?.gameState) {
               roomObj.latestGameState = data.gameState;
             }
-
-            if (isAway) {
-              // Trigger 30-second match pause if not already paused
-              if (!roomObj.isPaused) {
-                roomObj.isPaused = true;
-                roomObj.pausedPlayerId = targetPlayerId;
-                const p = roomObj.state.players.find((pl) => pl.id === targetPlayerId);
-                const pName = data?.playerName || p?.name || 'Opponent';
-                console.log(`[Match Paused] Room ${currentRoomCode} paused for 30s because player ${targetPlayerId} (${pName}) is away/inactive`);
-
-                broadcastToRoom(currentRoomCode, {
-                  type: 'matchPaused',
-                  senderId: targetPlayerId,
-                  data: {
-                    playerId: targetPlayerId,
-                    playerName: pName,
-                    durationSeconds: 30,
-                    reason: data?.reason || 'away',
-                    savedGameState: roomObj.latestGameState,
-                  },
-                });
-
-                if (roomObj.pauseGraceTimeout) clearTimeout(roomObj.pauseGraceTimeout);
-                roomObj.pauseGraceTimeout = setTimeout(() => {
-                  if (rooms.has(currentRoomCode) && roomObj.isPaused && roomObj.pausedPlayerId === targetPlayerId) {
-                    console.log(`[30s Timeout Expired] Player ${targetPlayerId} failed to reconnect to ${currentRoomCode}. Awarding victory to active player!`);
-                    roomObj.isPaused = false;
-                    roomObj.pausedPlayerId = null;
-                    roomObj.state.status = 'finished';
-                    roomObj.forfeitedPlayerId = targetPlayerId;
-                    roomObj.forfeitedReason = 'Failed to reconnect within 30 seconds';
-
-                    const remainingPlayers = roomObj.state.players.filter((p) => p.id !== targetPlayerId);
-                    const winner = remainingPlayers[0] || roomObj.state.players[0];
-                    roomObj.winner = winner;
-
-                    if (roomObj.latestGameState) {
-                      roomObj.latestGameState.isGameOver = true;
-                      roomObj.latestGameState.winnerColor = winner?.color;
-                      roomObj.latestGameState.forfeitedPlayerId = targetPlayerId;
-                      roomObj.latestGameState.reason = 'Failed to reconnect within 30 seconds';
-                    }
-
-                    broadcastToRoom(currentRoomCode, {
-                      type: 'playerForfeited',
-                      senderId: 'server',
-                      data: {
-                        playerId: targetPlayerId,
-                        reason: 'Failed to reconnect within 30 seconds',
-                        winnerId: winner?.id,
-                        winnerColor: winner?.color,
-                        winnerName: winner?.name,
-                      },
-                    });
-                  }
-                }, 30000);
-              }
-            } else {
-              // Player came back before 30 seconds! Unpause match and resume from saved state
-              if (roomObj.isPaused) {
-                if (roomObj.pauseGraceTimeout) {
-                  clearTimeout(roomObj.pauseGraceTimeout);
-                  roomObj.pauseGraceTimeout = null;
-                }
-                roomObj.isPaused = false;
-                roomObj.pausedPlayerId = null;
-                console.log(`[Match Resumed] Room ${currentRoomCode} resumed by player ${targetPlayerId}`);
-
-                broadcastToRoom(currentRoomCode, {
-                  type: 'matchResumed',
-                  senderId: targetPlayerId,
-                  data: {
-                    playerId: targetPlayerId,
-                    playerName: data?.playerName,
-                    savedGameState: roomObj.latestGameState,
-                  },
-                });
-              }
-            }
           }
 
+          // In Ludo King style: Never pause match! Just relay player status in real-time
           broadcastToRoom(currentRoomCode, msg, senderId);
           break;
         }
@@ -491,55 +411,6 @@ wss.on('connection', (ws) => {
           if (roomObj.cleanupTimeout) {
             clearTimeout(roomObj.cleanupTimeout);
             roomObj.cleanupTimeout = null;
-          }
-
-          // If match already concluded / player was forfeited after 30s timeout:
-          if (roomObj.state.status === 'finished' || roomObj.forfeitedPlayerId === currentPlayerId) {
-            console.log(`[Reconnect After Timeout] Player "${currentPlayerId}" returned after 30s timeout expired. Sending match lost.`);
-            ws.send(JSON.stringify({
-              type: 'playerForfeited',
-              senderId: 'server',
-              data: {
-                playerId: currentPlayerId,
-                reason: 'Failed to reconnect within 30 seconds',
-                winnerId: roomObj.winner?.id,
-                winnerColor: roomObj.winner?.color,
-                winnerName: roomObj.winner?.name,
-              },
-            }));
-            if (roomObj.latestGameState) {
-              ws.send(JSON.stringify({
-                type: 'gameStateSync',
-                senderId: 'server',
-                data: {
-                  ...roomObj.latestGameState,
-                  isGameOver: true,
-                  winnerColor: roomObj.winner?.color,
-                },
-              }));
-            }
-            return;
-          }
-
-          // If room was paused for this player, unpause and resume!
-          if (roomObj.isPaused && (roomObj.pausedPlayerId === currentPlayerId || !roomObj.pausedPlayerId)) {
-            if (roomObj.pauseGraceTimeout) {
-              clearTimeout(roomObj.pauseGraceTimeout);
-              roomObj.pauseGraceTimeout = null;
-            }
-            roomObj.isPaused = false;
-            roomObj.pausedPlayerId = null;
-            console.log(`[Match Resumed via Reconnect] Room ${cleanCode} resumed by player ${currentPlayerId}`);
-
-            broadcastToRoom(cleanCode, {
-              type: 'matchResumed',
-              senderId: currentPlayerId,
-              data: {
-                playerId: currentPlayerId,
-                playerName: playerName,
-                savedGameState: roomObj.latestGameState,
-              },
-            });
           }
 
           console.log(`[Reconnect Success] Player "${currentPlayerId}" reconnected to "${cleanCode}"`);
@@ -631,53 +502,9 @@ function handleDisconnect(roomCode, playerId) {
   console.log(`[-] Player ${playerId} socket disconnected from ${roomCode}`);
   roomObj.clients.delete(playerId);
 
-  // If game is currently playing:
-  // Pause the game for 30 seconds and allow player to reconnect
+  // In Ludo King style: If game is currently playing, NEVER pause match.
+  // Notify room that player is disconnected/away so bot auto-play continues seamlessly.
   if (roomObj.state.status === 'playing') {
-    if (!roomObj.isPaused) {
-      roomObj.isPaused = true;
-      roomObj.pausedPlayerId = playerId;
-      const p = roomObj.state.players.find((pl) => pl.id === playerId);
-      const pName = p ? p.name : 'Opponent';
-      console.log(`[Match Paused on Disconnect] Room ${roomCode} paused for 30s because player ${playerId} (${pName}) disconnected`);
-
-      broadcastToRoom(roomCode, {
-        type: 'matchPaused',
-        senderId: playerId,
-        data: {
-          playerId: playerId,
-          playerName: pName,
-          durationSeconds: 30,
-          reason: 'disconnected',
-          savedGameState: roomObj.latestGameState,
-        },
-      });
-
-      if (roomObj.pauseGraceTimeout) clearTimeout(roomObj.pauseGraceTimeout);
-      roomObj.pauseGraceTimeout = setTimeout(() => {
-        if (rooms.has(roomCode) && roomObj.isPaused && roomObj.pausedPlayerId === playerId) {
-          console.log(`[30s Timeout Expired on Disconnect] Player ${playerId} failed to reconnect to ${roomCode}. Awarding victory!`);
-          roomObj.isPaused = false;
-          roomObj.pausedPlayerId = null;
-
-          const remainingPlayers = roomObj.state.players.filter((p) => p.id !== playerId);
-          const winner = remainingPlayers[0] || roomObj.state.players[0];
-
-          broadcastToRoom(roomCode, {
-            type: 'playerForfeited',
-            senderId: 'server',
-            data: {
-              playerId: playerId,
-              reason: 'Disconnected / Failed to reconnect within 30 seconds',
-              winnerId: winner?.id,
-              winnerColor: winner?.color,
-              winnerName: winner?.name,
-            },
-          });
-        }
-      }, 30000);
-    }
-
     broadcastToRoom(roomCode, {
       type: 'playerStatus',
       senderId: playerId,
