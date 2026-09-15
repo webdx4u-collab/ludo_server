@@ -352,9 +352,41 @@ wss.on('connection', (ws) => {
           break;
         }
 
-        // Gameplay actions: Rebroadcast to all other players in the room
-        case 'diceRoll':
-        case 'tokenMove':
+        case 'diceRoll': {
+          if (!currentRoomCode) return;
+          const roomObj = rooms.get(currentRoomCode);
+          if (roomObj && roomObj.latestGameState) {
+            roomObj.latestGameState.diceValue = data?.diceValue;
+            if (data?.color) {
+              roomObj.latestGameState.currentPlayerColor = data.color;
+            }
+          }
+          broadcastToRoom(currentRoomCode, msg, senderId);
+          break;
+        }
+
+        case 'tokenMove': {
+          if (!currentRoomCode) return;
+          const roomObj = rooms.get(currentRoomCode);
+          if (roomObj && roomObj.latestGameState && roomObj.latestGameState.players) {
+            const { tokenId, step, toStep, color } = data || {};
+            const targetStep = toStep !== undefined ? toStep : step;
+            if (color && tokenId !== undefined && targetStep !== undefined) {
+              const player = roomObj.latestGameState.players.find(
+                (p) => String(p.color).toLowerCase() === String(color).toLowerCase()
+              );
+              if (player && player.tokens) {
+                const token = player.tokens.find((t) => t.id === tokenId);
+                if (token) {
+                  token.step = targetStep;
+                }
+              }
+            }
+          }
+          broadcastToRoom(currentRoomCode, msg, senderId);
+          break;
+        }
+
         case 'emote':
         case 'playerAutoMove':
         case 'playerForfeited': {
